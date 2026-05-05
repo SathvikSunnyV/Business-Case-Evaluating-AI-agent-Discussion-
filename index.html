@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>AgentDebate — Free Business Intelligence Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<style>
+:root {
+  --bg: #0d0f14;
+  --surface: #13161e;
+  --surface2: #1a1e28;
+  --border: #252a38;
+  --border2: #2e3447;
+  --text: #d4cfc7;
+  --text-dim: #6b7080;
+  --text-bright: #eceae5;
+  --advocate: #3ddc84;
+  --advocate-dim: #1a3d2a;
+  --critic: #ff6b6b;
+  --critic-dim: #3d1a1a;
+  --research: #60a5fa;
+  --research-dim: #1a2a3d;
+  --judge: #f59e0b;
+  --judge-dim: #3d2e0a;
+  --accent: #7c6af7;
+  --mono: 'Space Mono', monospace;
+  --serif: 'Playfair Display', Georgia, serif;
+  --sans: 'IBM Plex Sans', sans-serif;
+}
+
+*{box-sizing:border-box;margin:0;padding:0;}
+
+body{
+  font-family:var(--sans);
+  background:var(--bg);
+  color:var(--text);
+  min-height:100vh;
+  line-height:1.6;
+}
+
+/* Scanline overlay */
+body::before{
+  content:'';
+  position:fixed;
+  inset:0;
+  background:repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+  pointer-events:none;
+  z-index:9999;
+}
+
+/* ── Header ── */
+header{
+  background:var(--surface);
+  border-bottom:1px solid var(--border2);
+  padding:1.25rem 2.5rem;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  position:sticky;
+  top:0;
+  z-index:100;
+}
+
+.logo-wrap{display:flex;align-items:center;gap:1.2rem;}
+
+.logo-icon{
+  width:36px;height:36px;
+  background:var(--accent);
+  border-radius:6px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:1.1rem;
+  flex-shrink:0;
+}
+
+.logo-text{
+  font-family:var(--serif);
+  font-size:1.35rem;
+  font-weight:700;
+  color:var(--text-bright);
+  letter-spacing:-0.01em;
+}
+
+.logo-text span{color:var(--accent);}
+
+.logo-sub{
+  font-family:var(--mono);
+  font-size:0.6rem;
+  color:var(--text-dim);
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+  margin-top:0.15rem;
+}
+
+.header-right{
+  display:flex;
+  align-items:center;
+  gap:0.6rem;
+}
+
+.agent-pill{
+  font-family:var(--mono);
+  font-size:0.58rem;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+  padding:0.25rem 0.65rem;
+  border-radius:20px;
+  border:1px solid;
+}
+
+.pill-r{color:var(--research);border-color:var(--research);background:rgba(96,165,250,0.06);}
+.pill-a{color:var(--advocate);border-color:var(--advocate);background:rgba(61,220,132,0.06);}
+.pill-c{color:var(--critic);border-color:var(--critic);background:rgba(255,107,107,0.06);}
+.pill-j{color:var(--judge);border-color:var(--judge);background:rgba(245,158,11,0.06);}
+
+.status-dot{
+  width:7px;height:7px;border-radius:50%;
+  background:var(--text-dim);
+  margin-left:0.5rem;
+  transition:background 0.3s;
+}
+.status-dot.active{background:var(--advocate);animation:pulse 1.2s ease-in-out infinite;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}
+
+/* ── Main layout ── */
+main{
+  max-width:1000px;
+  margin:0 auto;
+  padding:2.5rem 2rem;
+}
+
+/* ── System status banner ── */
+.system-banner{
+  font-family:var(--mono);
+  font-size:0.7rem;
+  color:var(--text-dim);
+  border:1px solid var(--border);
+  border-radius:6px;
+  padding:0.6rem 1rem;
+  margin-bottom:2rem;
+  display:flex;
+  align-items:center;
+  gap:0.8rem;
+  background:var(--surface);
+}
+
+.system-banner.ok .blink{color:var(--advocate);}
+.system-banner.error-state .blink{color:var(--critic);}
+.system-banner.loading .blink{color:var(--judge);}
+
+.blink{animation:blink 1s step-end infinite;}
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:0;}}
+
+/* ── Input card ── */
+.input-card{
+  background:var(--surface);
+  border:1px solid var(--border2);
+  border-radius:10px;
+  padding:2rem;
+  margin-bottom:2rem;
+}
+
+.card-label{
+  font-family:var(--mono);
+  font-size:0.6rem;
+  letter-spacing:0.2em;
+  text-transform:uppercase;
+  color:var(--text-dim);
+  margin-bottom:0.6rem;
+}
+
+.input-heading{
+  font-family:var(--serif);
+  font-size:1.25rem;
+  font-weight:700;
+  color:var(--text-bright);
+  margin-bottom:1.2rem;
+  font-style:italic;
+}
+
+textarea{
+  width:100%;
+  min-height:120px;
+  font-family:var(--sans);
+  font-size:0.92rem;
+  color:var(--text);
+  background:var(--bg);
+  border:1px solid var(--border2);
+  border-radius:7px;
+  padding:1rem 1.2rem;
+  resize:vertical;
+  outline:none;
+  transition:border-color 0.2s;
+  line-height:1.65;
+}
+textarea:focus{border-color:var(--accent);}
+textarea::placeholder{color:var(--text-dim);font-style:italic;}
+
+.controls{
+  display:flex;
+  align-items:center;
+  gap:1rem;
+  margin-top:1rem;
+  flex-wrap:wrap;
+}
+
+.ctrl-group{
+  display:flex;
+  flex-direction:column;
+  gap:0.3rem;
+}
+
+.ctrl-group label{
+  font-family:var(--mono);
+  font-size:0.58rem;
+  letter-spacing:0.15em;
+  text-transform:uppercase;
+  color:var(--text-dim);
+}
+
+select{
+  font-family:var(--mono);
+  font-size:0.78rem;
+  color:var(--text);
+  background:var(--bg);
+  border:1px solid var(--border2);
+  border-radius:6px;
+  padding:0.45rem 0.8rem;
+  outline:none;
+  cursor:pointer;
+}
+
+select:focus{border-color:var(--accent);}
+
+.btn-run{
+  margin-left:auto;
+  font-family:var(--mono);
+  font-weight:700;
+  font-size:0.82rem;
+  letter-spacing:0.05em;
+  text-transform:uppercase;
+  color:#fff;
+  background:var(--accent);
+  border:none;
+  border-radius:7px;
+  padding:0.65rem 2rem;
+  cursor:pointer;
+  transition:background 0.2s, transform 0.1s, opacity 0.2s;
+}
+.btn-run:hover{background:#6354e8;}
+.btn-run:active{transform:scale(0.97);}
+.btn-run:disabled{opacity:0.4;cursor:not-allowed;transform:none;}
+
+/* ── Progress ── */
+.progress-wrap{
+  height:2px;
+  background:var(--border);
+  border-radius:1px;
+  margin-bottom:1.5rem;
+  overflow:hidden;
+  display:none;
+}
+.progress-bar{
+  height:100%;
+  width:0%;
+  background:linear-gradient(90deg,var(--accent),var(--advocate),var(--judge));
+  transition:width 0.6s ease;
+  border-radius:1px;
+}
+
+.phase-line{
+  font-family:var(--mono);
+  font-size:0.72rem;
+  color:var(--text-dim);
+  padding:0.5rem 0;
+  margin-bottom:1rem;
+  display:none;
+  border-left:2px solid var(--accent);
+  padding-left:0.8rem;
+  animation:fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+@keyframes slideUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);}}
+
+/* ── Error box ── */
+.error-wrap{
+  display:none;
+  font-family:var(--mono);
+  font-size:0.78rem;
+  color:var(--critic);
+  background:var(--critic-dim);
+  border:1px solid var(--critic);
+  border-radius:7px;
+  padding:1rem 1.2rem;
+  margin-bottom:1.5rem;
+}
+
+/* ── Result cards ── */
+.result-card{
+  background:var(--surface);
+  border:1px solid var(--border2);
+  border-radius:10px;
+  margin-bottom:1rem;
+  overflow:hidden;
+  display:none;
+  animation:slideUp 0.35s ease;
+}
+
+.card-head{
+  display:flex;
+  align-items:center;
+  gap:0.75rem;
+  padding:0.9rem 1.25rem;
+  cursor:pointer;
+  user-select:none;
+  transition:background 0.15s;
+  border-bottom:1px solid var(--border);
+}
+.card-head:hover{background:var(--surface2);}
+
+.agent-color{
+  width:3px;
+  height:28px;
+  border-radius:2px;
+  flex-shrink:0;
+}
+
+.card-head-title{
+  font-family:var(--serif);
+  font-size:0.95rem;
+  font-weight:700;
+  color:var(--text-bright);
+  flex:1;
+}
+
+.card-head-tag{
+  font-family:var(--mono);
+  font-size:0.58rem;
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+  color:var(--text-dim);
+}
+
+.chevron{
+  font-size:0.65rem;
+  color:var(--text-dim);
+  transition:transform 0.2s;
+}
+.result-card.collapsed .chevron{transform:rotate(-90deg);}
+.result-card.collapsed .card-body{display:none;}
+
+.card-body{
+  padding:1.5rem 1.75rem;
+  font-size:0.92rem;
+  line-height:1.8;
+  color:var(--text);
+  white-space:pre-wrap;
+  word-break:break-word;
+}
+
+/* Markdown rendering inside card body */
+.card-body h1,.card-body h2,.card-body h3{
+  font-family:var(--serif);
+  color:var(--text-bright);
+  margin:1.4rem 0 0.5rem;
+  font-weight:700;
+}
+.card-body h1{font-size:1.2rem;border-bottom:1px solid var(--border2);padding-bottom:0.4rem;}
+.card-body h2{font-size:1.05rem;border-bottom:1px solid var(--border);padding-bottom:0.3rem;}
+.card-body h3{font-size:0.95rem;color:var(--judge);}
+.card-body p{margin-bottom:0.9rem;}
+.card-body p:last-child{margin-bottom:0;}
+.card-body ul,.card-body ol{margin:0.4rem 0 0.9rem 1.4rem;}
+.card-body li{margin-bottom:0.25rem;}
+.card-body strong{color:var(--text-bright);font-weight:600;}
+.card-body em{color:var(--text-dim);}
+.card-body code{
+  font-family:var(--mono);
+  font-size:0.82em;
+  background:var(--surface2);
+  padding:0.1em 0.4em;
+  border-radius:3px;
+  color:var(--research);
+}
+
+/* Verdict highlights */
+.verdict-yes{color:var(--advocate);font-weight:700;font-size:1.05em;}
+.verdict-no{color:var(--critic);font-weight:700;font-size:1.05em;}
+.verdict-cond{color:var(--judge);font-weight:700;font-size:1.05em;}
+
+/* Round divider */
+.round-div{
+  display:none;
+  align-items:center;
+  gap:1rem;
+  margin:0.5rem 0;
+}
+.round-div-line{flex:1;height:1px;background:var(--border);}
+.round-div-label{
+  font-family:var(--mono);
+  font-size:0.58rem;
+  letter-spacing:0.2em;
+  text-transform:uppercase;
+  color:var(--border2);
+  white-space:nowrap;
+}
+
+/* Judge card special */
+.result-card.card-judge{
+  border-color:var(--judge);
+  box-shadow:0 0 30px rgba(245,158,11,0.08);
+}
+
+/* Empty state */
+.empty{
+  text-align:center;
+  padding:5rem 2rem;
+  color:var(--text-dim);
+}
+.empty-icon{font-size:2.5rem;margin-bottom:1rem;opacity:0.3;}
+.empty p{font-size:0.9rem;font-style:italic;}
+
+/* Spinner */
+.spinner{
+  display:inline-block;
+  width:8px;height:8px;
+  border:1.5px solid transparent;
+  border-top-color:currentColor;
+  border-radius:50%;
+  animation:spin 0.65s linear infinite;
+  margin-right:5px;
+  vertical-align:middle;
+}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* Responsive */
+@media(max-width:680px){
+  header{padding:1rem 1.2rem;flex-direction:column;gap:0.8rem;}
+  main{padding:1.5rem 1rem;}
+  .input-card{padding:1.25rem;}
+  .controls{flex-direction:column;align-items:stretch;}
+  .btn-run{margin-left:0;}
+  .header-right{flex-wrap:wrap;justify-content:center;}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo-wrap">
+    <div class="logo-icon">⚖</div>
+    <div>
+      <div class="logo-text">Agent<span>Debate</span></div>
+      <div class="logo-sub">Free · Local LLM · LangChain + Ollama + DuckDuckGo</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <span class="agent-pill pill-r">Researcher</span>
+    <span class="agent-pill pill-a">Advocate</span>
+    <span class="agent-pill pill-c">Critic</span>
+    <span class="agent-pill pill-j">Judge</span>
+    <div class="status-dot" id="statusDot"></div>
+  </div>
+</header>
+
+<main>
+
+  <!-- System banner -->
+  <div class="system-banner loading" id="sysBanner">
+    <span class="blink">◆</span>
+    <span id="sysMsg">Checking Ollama connection...</span>
+  </div>
+
+  <!-- Input -->
+  <div class="input-card">
+    <div class="card-label">Submit Business Case</div>
+    <div class="input-heading">Describe your business idea or case for analysis</div>
+    <textarea id="caseInput" rows="5" placeholder="e.g. Opening a cloud kitchen for healthy meal preps in Hyderabad targeting IT professionals, with delivery via Swiggy and Zomato. Initial investment ₹15 lakhs, planning to launch in Madhapur..."></textarea>
+    <div class="controls">
+      <div class="ctrl-group">
+        <label>Debate Rounds</label>
+        <select id="roundsSel">
+          <option value="1">1 Round — Fast</option>
+          <option value="2" selected>2 Rounds — Balanced</option>
+          <option value="3">3 Rounds — Deep Dive</option>
+        </select>
+      </div>
+      <button class="btn-run" id="runBtn" onclick="startDebate()">▶ Run Debate</button>
+    </div>
+  </div>
+
+  <!-- Error -->
+  <div class="error-wrap" id="errBox"></div>
+
+  <!-- Progress -->
+  <div class="progress-wrap" id="progWrap">
+    <div class="progress-bar" id="progBar"></div>
+  </div>
+  <div class="phase-line" id="phaseLine"></div>
+
+  <!-- Results -->
+  <div id="results">
+    <div class="empty" id="emptyState">
+      <div class="empty-icon">🤖</div>
+      <p>Enter a business case above. All processing happens locally — no API keys, no fees.</p>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ── Health check on load ──────────────────────────────────────────────────────
+async function checkHealth() {
+  const banner = document.getElementById('sysBanner');
+  const msg = document.getElementById('sysMsg');
+  try {
+    const r = await fetch('/api/health');
+    const data = await r.json();
+    if (data.ollama === 'running' && data.model_ready) {
+      banner.className = 'system-banner ok';
+      msg.textContent = `✓ Ollama running · Model: ${data.model} · Ready`;
+    } else if (data.ollama === 'running') {
+      banner.className = 'system-banner loading';
+      msg.textContent = `⚠ Ollama running but model not found. Run: ollama pull ${data.model}`;
+    } else {
+      banner.className = 'system-banner error-state';
+      msg.textContent = `✗ Ollama not running. Run: ollama serve && ollama pull llama3.1:8b`;
+    }
+  } catch {
+    banner.className = 'system-banner error-state';
+    msg.textContent = '✗ Cannot reach server. Is python main.py running?';
+  }
+}
+checkHealth();
+
+// ── Debate orchestration ──────────────────────────────────────────────────────
+let evtSrc = null;
+
+function startDebate() {
+  const businessCase = document.getElementById('caseInput').value.trim();
+  const rounds = document.getElementById('roundsSel').value;
+
+  if (!businessCase) {
+    showError('Please describe a business case first.');
+    return;
+  }
+
+  if (evtSrc) { evtSrc.close(); }
+
+  // Reset
+  clearResults();
+  document.getElementById('errBox').style.display = 'none';
+  document.getElementById('emptyState').style.display = 'none';
+  document.getElementById('progWrap').style.display = 'block';
+  document.getElementById('phaseLine').style.display = 'block';
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('runBtn').textContent = '⏳ Running...';
+  document.getElementById('statusDot').classList.add('active');
+  setProgress(5);
+
+  const url = `/api/debate?case=${encodeURIComponent(businessCase)}&rounds=${rounds}`;
+  evtSrc = new EventSource(url);
+
+  evtSrc.addEventListener('phase', e => {
+    const d = parse(e);
+    setPhase(d.message);
+    if (d.phase === 'research') setProgress(10);
+    else if (d.phase === 'debate') setProgress(30);
+    else if (d.phase === 'judgment') setProgress(87);
+  });
+
+  evtSrc.addEventListener('status', e => {
+    const d = parse(e);
+    setPhase(d.message);
+  });
+
+  evtSrc.addEventListener('research_complete', e => {
+    const d = parse(e);
+    addCard('research', '🔍 Research Brief', 'Live Web Data', null, d.content);
+    setProgress(28);
+  });
+
+  evtSrc.addEventListener('round_start', e => {
+    const d = parse(e);
+    addRoundDivider(d.round, d.totalRounds);
+  });
+
+  evtSrc.addEventListener('agent_thinking', e => {
+    const d = parse(e);
+    setPhase(`<span class="spinner"></span>${d.message}`);
+  });
+
+  evtSrc.addEventListener('advocate_argument', e => {
+    const d = parse(e);
+    addCard('advocate', '📈 Advocate', `Round ${d.round}`, 'In Favor', d.content);
+    setProgress(30 + (d.round / parseInt(rounds)) * 27);
+  });
+
+  evtSrc.addEventListener('critic_argument', e => {
+    const d = parse(e);
+    addCard('critic', '🔴 Critic', `Round ${d.round}`, 'Risk Analysis', d.content);
+    setProgress(30 + (d.round / parseInt(rounds)) * 52);
+  });
+
+  evtSrc.addEventListener('final_report', e => {
+    const d = parse(e);
+    addCard('judge', '⚖️  Final Report', 'Judge\'s Verdict', 'Comprehensive Assessment', d.content, true);
+    setProgress(100);
+  });
+
+  evtSrc.addEventListener('complete', () => {
+    setPhase('✅ Analysis complete — see the Judge\'s report below.');
+    done();
+  });
+
+  evtSrc.addEventListener('error', e => {
+    try {
+      const d = parse(e);
+      showError('Agent error: ' + d.message);
+    } catch {}
+    done();
+  });
+
+  evtSrc.onerror = () => {
+    if (evtSrc.readyState === EventSource.CLOSED) return;
+    showError('Connection lost. Check that python main.py is running.');
+    done();
+  };
+}
+
+function done() {
+  document.getElementById('runBtn').disabled = false;
+  document.getElementById('runBtn').textContent = '▶ Run Again';
+  document.getElementById('statusDot').classList.remove('active');
+  if (evtSrc) evtSrc.close();
+}
+
+// ── DOM helpers ───────────────────────────────────────────────────────────────
+function parse(e) { return JSON.parse(e.data); }
+
+function setProgress(pct) {
+  document.getElementById('progBar').style.width = pct + '%';
+}
+
+function setPhase(html) {
+  document.getElementById('phaseLine').innerHTML = html;
+}
+
+function showError(msg) {
+  const b = document.getElementById('errBox');
+  b.textContent = '⚠ ' + msg;
+  b.style.display = 'block';
+}
+
+function clearResults() {
+  document.getElementById('results').innerHTML = '';
+}
+
+function addRoundDivider(round, total) {
+  const el = document.createElement('div');
+  el.className = 'round-div';
+  el.style.display = 'flex';
+  el.innerHTML = `
+    <div class="round-div-line"></div>
+    <div class="round-div-label">⚔ Debate Round ${round} of ${total}</div>
+    <div class="round-div-line"></div>`;
+  document.getElementById('results').appendChild(el);
+}
+
+const COLORS = {
+  research: 'var(--research)',
+  advocate: 'var(--advocate)',
+  critic: 'var(--critic)',
+  judge: 'var(--judge)',
+};
+
+function addCard(type, title, roundLabel, subtitle, content, isJudge = false) {
+  const results = document.getElementById('results');
+  const card = document.createElement('div');
+  card.className = `result-card${isJudge ? ' card-judge' : ''}`;
+
+  const displayTitle = subtitle
+    ? `${title} <span style="font-weight:400;font-size:0.85em;font-style:italic;color:var(--text-dim)">— ${subtitle}</span>`
+    : title;
+
+  card.innerHTML = `
+    <div class="card-head" onclick="toggleCard(this)">
+      <div class="agent-color" style="background:${COLORS[type]};"></div>
+      <div class="card-head-title">${displayTitle}</div>
+      ${roundLabel ? `<div class="card-head-tag">${roundLabel}</div>` : ''}
+      <div class="chevron">▼</div>
+    </div>
+    <div class="card-body">${renderMarkdown(content)}</div>`;
+
+  card.style.display = 'block';
+  results.appendChild(card);
+  setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 80);
+}
+
+function toggleCard(head) {
+  head.closest('.result-card').classList.toggle('collapsed');
+}
+
+function renderMarkdown(text) {
+  // Sanitize
+  let t = text
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  // Headers
+  t = t.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  t = t.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  t = t.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // Bold / italic
+  t = t.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  t = t.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+  // Code
+  t = t.replace(/`(.+?)`/g, '<code>$1</code>');
+
+  // Verdict keywords
+  t = t.replace(/\bRECOMMEND\b(?! NOT)/g, '<span class="verdict-yes">RECOMMEND</span>');
+  t = t.replace(/\bDO NOT RECOMMEND\b/g, '<span class="verdict-no">DO NOT RECOMMEND</span>');
+  t = t.replace(/\bCONDITIONAL(LY)?\b/gi, '<span class="verdict-cond">CONDITIONAL$1</span>');
+
+  // Lists
+  t = t.replace(/^[-•] (.+)$/gm, '<li>$1</li>');
+  t = t.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  t = t.replace(/(<li>[\s\S]+?<\/li>)/g, '<ul>$1</ul>');
+
+  // Paragraphs
+  t = t.split(/\n\n+/).map(block => {
+    if (/^<[hul]/.test(block.trim())) return block;
+    return `<p>${block.replace(/\n/g,'<br>')}</p>`;
+  }).join('\n');
+
+  return t;
+}
+</script>
+</body>
+</html>
