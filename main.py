@@ -1,39 +1,43 @@
 """
-main.py — FastAPI server orchestrating all agents with Server-Sent Events (SSE).
-Streams progress to the frontend in real time.
+main.py - FastAPI server with full SSE streaming.
+
+Architecture change: agents now use ollama AsyncClient streaming directly,
+so they run in the same event loop as FastAPI. No more run_in_executor.
+Users see live token output as the LLM generates, not just silence.
 """
 
 import asyncio
 import json
+import traceback as tb
+from pathlib import Path
+
 from fastapi import FastAPI, Query
-from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 from sse_starlette.sse import EventSourceResponse
 import uvicorn
 
-from agents.researcher import run_researcher
-from agents.advocate import run_advocate
-from agents.critic import run_critic
-from agents.judge import run_judge
+from agents.researcher import run_researcher_async
+from agents.advocate import run_advocate_async
+from agents.critic import run_critic_async
+from agents.judge import run_judge_async
 import config
 
 app = FastAPI(title="AgentDebate")
+BASE_DIR = Path(__file__).parent
 
 
-# ─── Serve frontend ────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
-    with open("index.html", "r", encoding="utf-8") as f:
+    with open(BASE_DIR / "index.html", "r", encoding="utf-8") as f:
         return f.read()
 
 
-# ─── Health check ──────────────────────────────────────────────────────────────
 @app.get("/api/health")
 async def health():
     import httpx
     try:
         async with httpx.AsyncClient() as client:
-            r = await client.get(f"{config.OLLAMA_BASE_URL}/api/tags", timeout=3)
+            r = await client.get(f"{config.OLLAMA_BASE_URL}/api/tags", timeout=5)
             models = [m["name"] for m in r.json().get("models", [])]
             model_ready = any(config.MODEL_NAME.split(":")[0] in m for m in models)
         return {
@@ -46,157 +50,162 @@ async def health():
     except Exception as e:
         return {
             "status": "error",
-            "ollama": "not running",
+            "ollama": "not_running",
+            "model": config.MODEL_NAME,
             "message": str(e),
-            "fix": f"Run: ollama serve && ollama pull {config.MODEL_NAME}",
         }
 
 
-# ─── Main debate SSE endpoint ──────────────────────────────────────────────────
+@app.get("/api/test-llm")
+async def test_llm():
+    """Quick smoke-test: send a tiny prompt to Ollama and return result."""
+    import ollama
+    try:
+        client = ollama.AsyncClient(host=config.OLLAMA_BASE_URL)
+        full = ""
+        async for chunk in await client.generate(
+            model=config.MODEL_NAME,
+            prompt="What is 2+2? Answer in one word.",
+            stream=True,
+            options={"num_predict": 10}
+        ):
+            full += chunk.get("response", "")
+            if chunk.get("done", False):
+                break
+        return {"status": "ok", "model": config.MODEL_NAME, "response": full.strip()}
+    except Exception as e:
+        tb.print_exc()
+        return {"status": "error", "error": type(e).__name__, "message": str(e)}
+
+
 @app.get("/api/debate")
 async def debate(
-    case: str = Query(..., description="Business case to debate"),
+    case: str = Query(...),
     rounds: int = Query(default=config.DEFAULT_ROUNDS, ge=1, le=3),
 ):
     async def event_generator():
         def send(event: str, data: dict):
-            return {"event": event, "data": json.dumps(data)}
+            return {"event": event, "data": json.dumps(data, ensure_ascii=False)}
+
+        # Status messages from agents go through this queue
+        status_q: asyncio.Queue = asyncio.Queue()
+
+        def cb(msg: str):
+            """Called by agent code to report progress."""
+            status_q.put_nowait(msg)
+
+        async def drain_status():
+            """Yield all queued status messages."""
+            while not status_q.empty():
+                yield send("status", {"message": status_q.get_nowait()})
 
         try:
-            # ── Phase 1: Research ─────────────────────────────────────────────
+            # ── Phase 1: Research ──────────────────────────────────────────────
             yield send("phase", {
                 "phase": "research",
-                "message": "🔍 Researcher agent searching the web for live market data..."
+                "message": "Researcher is searching the web for live market data..."
             })
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
 
-            status_events = []
+            # Run directly as async - no run_in_executor needed
+            research = await run_researcher_async(case, cb)
 
-            def status_cb(msg: str):
-                status_events.append(msg)
+            async for ev in drain_status():
+                yield ev
+                await asyncio.sleep(0.02)
 
-            # Run researcher in thread (blocking LangChain calls)
-            loop = asyncio.get_event_loop()
+            yield send("research_complete", {"content": research})
+            await asyncio.sleep(0.05)
 
-            research_brief = await loop.run_in_executor(
-                None, lambda: run_researcher(case, status_cb)
-            )
-
-            # Flush status events
-            for msg in status_events:
-                yield send("status", {"message": msg})
-                await asyncio.sleep(0.05)
-            status_events.clear()
-
-            yield send("research_complete", {"content": research_brief})
-            await asyncio.sleep(0.1)
-
-            # ── Phase 2: Debate Rounds ────────────────────────────────────────
+            # ── Phase 2: Debate Rounds ─────────────────────────────────────────
             yield send("phase", {
                 "phase": "debate",
-                "message": f"⚔️ Starting debate — {rounds} round(s)..."
+                "message": f"Starting debate — {rounds} round(s)..."
             })
+            await asyncio.sleep(0.05)
 
-            debate_history = []
-            last_critic_arg = ""
-            last_advocate_arg = ""
+            history = []
+            prev_critic = ""
+            prev_advocate = ""
 
-            for round_num in range(1, rounds + 1):
-                yield send("round_start", {"round": round_num, "totalRounds": rounds})
-                await asyncio.sleep(0.1)
+            for r in range(1, rounds + 1):
+                yield send("round_start", {"round": r, "total": rounds})
+                await asyncio.sleep(0.05)
 
                 # Advocate
                 yield send("agent_thinking", {
-                    "agent": "advocate",
-                    "round": round_num,
-                    "message": f"📈 Advocate building Round {round_num} argument..."
+                    "agent": "advocate", "round": r,
+                    "message": f"Advocate writing Round {r} argument..."
                 })
+                await asyncio.sleep(0.05)
 
-                advocate_arg = await loop.run_in_executor(
-                    None,
-                    lambda r=round_num, c=last_critic_arg: run_advocate(
-                        case, research_brief, r, c, status_cb
-                    )
-                )
-                last_advocate_arg = advocate_arg
+                adv = await run_advocate_async(case, research, r, prev_critic, cb)
+                prev_advocate = adv
 
-                for msg in status_events:
-                    yield send("status", {"message": msg})
-                    await asyncio.sleep(0.05)
-                status_events.clear()
+                async for ev in drain_status():
+                    yield ev
+                    await asyncio.sleep(0.02)
 
-                yield send("advocate_argument", {"round": round_num, "content": advocate_arg})
-                await asyncio.sleep(0.1)
+                yield send("advocate_argument", {"round": r, "content": adv})
+                await asyncio.sleep(0.05)
 
                 # Critic
                 yield send("agent_thinking", {
-                    "agent": "critic",
-                    "round": round_num,
-                    "message": f"🔴 Critic countering in Round {round_num}..."
+                    "agent": "critic", "round": r,
+                    "message": f"Critic writing Round {r} counter-argument..."
                 })
+                await asyncio.sleep(0.05)
 
-                critic_arg = await loop.run_in_executor(
-                    None,
-                    lambda r=round_num, a=last_advocate_arg: run_critic(
-                        case, research_brief, r, a, status_cb
-                    )
-                )
-                last_critic_arg = critic_arg
+                crit = await run_critic_async(case, research, r, prev_advocate, cb)
+                prev_critic = crit
 
-                for msg in status_events:
-                    yield send("status", {"message": msg})
-                    await asyncio.sleep(0.05)
-                status_events.clear()
+                async for ev in drain_status():
+                    yield ev
+                    await asyncio.sleep(0.02)
 
-                yield send("critic_argument", {"round": round_num, "content": critic_arg})
-                await asyncio.sleep(0.1)
+                yield send("critic_argument", {"round": r, "content": crit})
+                await asyncio.sleep(0.05)
 
-                debate_history.append({
-                    "round": round_num,
-                    "advocate": advocate_arg,
-                    "critic": critic_arg,
-                })
+                history.append({"round": r, "advocate": adv, "critic": crit})
+                yield send("round_complete", {"round": r})
+                await asyncio.sleep(0.05)
 
-                yield send("round_complete", {"round": round_num})
-                await asyncio.sleep(0.1)
-
-            # ── Phase 3: Judge ────────────────────────────────────────────────
+            # ── Phase 3: Judge ─────────────────────────────────────────────────
             yield send("phase", {
                 "phase": "judgment",
-                "message": "⚖️ Judge synthesizing full debate into final report..."
+                "message": "Judge reading full debate and writing final report..."
             })
+            await asyncio.sleep(0.05)
 
-            final_report = await loop.run_in_executor(
-                None,
-                lambda: run_judge(case, research_brief, debate_history, status_cb)
-            )
+            report = await run_judge_async(case, research, history, cb)
 
-            for msg in status_events:
-                yield send("status", {"message": msg})
-                await asyncio.sleep(0.05)
-            status_events.clear()
+            async for ev in drain_status():
+                yield ev
+                await asyncio.sleep(0.02)
 
-            yield send("final_report", {"content": final_report})
-            yield send("complete", {"message": "Analysis complete!"})
+            yield send("final_report", {"content": report})
+            yield send("done", {"message": "Analysis complete!"})
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
-            yield send("error", {"message": str(e)})
+            tb.print_exc()
+            yield send("server_error", {
+                "message": f"{type(e).__name__}: {e}\n\nCheck terminal for full traceback."
+            })
+            yield send("done", {"message": "stopped due to error"})
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(event_generator(), ping=20)
 
 
-# ─── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("\n" + "═" * 55)
-    print("  🤖 AgentDebate — Free Multi-Agent Business Engine")
-    print("═" * 55)
+    print("\n" + "=" * 60)
+    print("  AgentDebate - Free Multi-Agent Business Engine")
+    print("=" * 60)
     print(f"  Model  : {config.MODEL_NAME}")
     print(f"  Ollama : {config.OLLAMA_BASE_URL}")
     print(f"  UI     : http://localhost:8000")
-    print("═" * 55)
-    print("\n  Make sure Ollama is running: ollama serve")
-    print(f"  Make sure model is pulled:  ollama pull {config.MODEL_NAME}\n")
-
+    print(f"  Test   : http://localhost:8000/api/test-llm")
+    print("=" * 60)
+    print(f"\n  Run diagnose first: python diagnose.py")
+    print(f"  Ollama must be running: ollama serve")
+    print(f"  Model must be pulled: ollama pull {config.MODEL_NAME}\n")
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
