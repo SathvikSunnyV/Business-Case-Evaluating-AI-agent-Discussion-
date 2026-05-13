@@ -1,21 +1,72 @@
 """
-critic.py — Stress-tests the business case, surfaces real risks.
-Directly counters the Advocate's arguments each round.
+critic.py - Stress-tests the business case using ollama streaming.
 """
 
-from langchain_ollama import OllamaLLM
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
+import asyncio
+import ollama
 import config
 
+PERSONA = (
+    "You are a skeptical, battle-hardened business analyst and risk consultant. "
+    "Think like a VC who has seen hundreds of pitches fail. "
+    "Stress-test this idea ruthlessly. Surface every real risk, flaw, and market challenge. "
+    "Be surgical and specific, not cynically dismissive. "
+    "Write in forceful clear prose. No bullet lists."
+)
 
-CRITIC_SYSTEM = """You are a skeptical, battle-hardened business analyst and risk consultant.
-You think like a VC who has seen 500 pitches — most of which failed.
-Your role is to stress-test business ideas ruthlessly — not to destroy them, but to surface every real risk, flaw, and market challenge.
-You use market data, historical failure cases, competitive dynamics, and economic realities.
-You are surgical and specific — not cynically dismissive.
-Challenge: unrealistic assumptions, capital burn, market saturation, regulatory barriers, competitive moats, execution difficulty.
-Write in forceful, clear prose backed by research data."""
+
+async def llm_generate(prompt: str, temperature: float = 0.6, max_tokens: int = 1500) -> str:
+    client = ollama.AsyncClient(host=config.OLLAMA_BASE_URL)
+    full_response = ""
+    async for chunk in await client.generate(
+        model=config.MODEL_NAME,
+        prompt=prompt,
+        stream=True,
+        options={"temperature": temperature, "num_predict": max_tokens}
+    ):
+        full_response += chunk.get("response", "")
+        if chunk.get("done", False):
+            break
+    return full_response.strip()
+
+
+async def run_critic_async(
+    business_case: str,
+    research_brief: str,
+    round_num: int,
+    advocate_current: str = "",
+    status_callback=None
+) -> str:
+    if status_callback:
+        status_callback(f"Critic: Writing Round {round_num} counter-argument...")
+
+    if advocate_current:
+        prompt = (
+            f"{PERSONA}\n\n"
+            f"BUSINESS CASE:\n{business_case}\n\n"
+            f"RESEARCH DATA:\n{research_brief}\n\n"
+            f"ADVOCATE'S ARGUMENT (counter this directly):\n{advocate_current}\n\n"
+            f"ROUND {round_num} TASK: Directly dismantle the Advocate's specific claims. "
+            f"Use research data, failure cases, and hard market realities. "
+            f"Identify the single biggest risk they ignored. "
+            f"Write 3-4 substantial paragraphs. No bullet lists."
+        )
+    else:
+        prompt = (
+            f"{PERSONA}\n\n"
+            f"BUSINESS CASE:\n{business_case}\n\n"
+            f"RESEARCH DATA:\n{research_brief}\n\n"
+            f"ROUND 1 TASK: Make the strongest case AGAINST this business. "
+            f"Cover: market risks, financial concerns, execution challenges, failure precedents. "
+            f"Write 3-4 substantial paragraphs. Be specific and honest. No bullet lists."
+        )
+
+    result = await llm_generate(prompt, temperature=config.CRITIC_TEMP, max_tokens=config.MAX_TOKENS)
+
+    if status_callback:
+        status_callback(f"Critic: Round {round_num} complete.")
+
+    return result
 
 
 def run_critic(
@@ -23,73 +74,12 @@ def run_critic(
     research_brief: str,
     round_num: int,
     advocate_current: str = "",
-    status_callback=None,
+    status_callback=None
 ) -> str:
-
-    if status_callback:
-        status_callback(f"🔴 Critic: Building Round {round_num} counter-argument...")
-
-    llm = OllamaLLM(
-        model=config.MODEL_NAME,
-        base_url=config.OLLAMA_BASE_URL,
-        temperature=config.CRITIC_TEMP,
-        num_predict=config.MAX_TOKENS,
-    )
-
-    if advocate_current:
-        prompt = PromptTemplate(
-            input_variables=["business_case", "research_brief", "advocate_current", "round_num"],
-            template="""{system}
-
-BUSINESS CASE:
-{business_case}
-
-MARKET RESEARCH DATA (use this to find risks and failure patterns):
-{research_brief}
-
-THE ADVOCATE JUST ARGUED:
-{advocate_current}
-
-ROUND {round_num} — Your task:
-1. Directly dismantle the Advocate's specific claims with counter-evidence
-2. Highlight the risks, assumptions, or gaps they glossed over
-3. Cite real-world failures or market data that contradict their optimism
-4. Identify the single biggest threat to this business that they ignored
-
-Write 3-4 substantial paragraphs. Be specific, data-driven, and unflinching.""".replace("{system}", CRITIC_SYSTEM)
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(
+            run_critic_async(business_case, research_brief, round_num, advocate_current, status_callback)
         )
-        result = LLMChain(llm=llm, prompt=prompt).run(
-            business_case=business_case,
-            research_brief=research_brief,
-            advocate_current=advocate_current,
-            round_num=round_num,
-        )
-    else:
-        prompt = PromptTemplate(
-            input_variables=["business_case", "research_brief"],
-            template="""{system}
-
-BUSINESS CASE:
-{business_case}
-
-MARKET RESEARCH DATA (use this to find risks):
-{research_brief}
-
-ROUND 1 — Opening critique:
-Make the strongest case AGAINST or identifying critical risks. Cover:
-1. The most dangerous market/competitive risks
-2. Financial viability concerns (capital, margins, burn rate)
-3. Execution challenges specific to this type of business
-4. Historical precedents of similar failures
-
-Write 3-4 substantial paragraphs. Be specific and honest.""".replace("{system}", CRITIC_SYSTEM)
-        )
-        result = LLMChain(llm=llm, prompt=prompt).run(
-            business_case=business_case,
-            research_brief=research_brief,
-        )
-
-    if status_callback:
-        status_callback(f"✅ Critic: Round {round_num} argument ready.")
-
-    return result.strip()
+    finally:
+        loop.close()
