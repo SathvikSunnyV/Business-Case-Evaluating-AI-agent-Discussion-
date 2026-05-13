@@ -1,103 +1,90 @@
 """
-judge.py — Reads the full debate + research and produces a final verdict report.
-Structured like a real investment committee output.
+judge.py - Synthesizes debate into final verdict using ollama streaming.
 """
 
-from langchain_ollama import OllamaLLM
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
+import asyncio
+import ollama
 import config
 
 
-def run_judge(
+async def llm_generate(prompt: str, temperature: float = 0.3, max_tokens: int = 2500) -> str:
+    client = ollama.AsyncClient(host=config.OLLAMA_BASE_URL)
+    full_response = ""
+    async for chunk in await client.generate(
+        model=config.MODEL_NAME,
+        prompt=prompt,
+        stream=True,
+        options={"temperature": temperature, "num_predict": max_tokens}
+    ):
+        full_response += chunk.get("response", "")
+        if chunk.get("done", False):
+            break
+    return full_response.strip()
+
+
+async def run_judge_async(
     business_case: str,
     research_brief: str,
-    debate_history: list[dict],
-    status_callback=None,
+    debate_history: list,
+    status_callback=None
 ) -> str:
-
     if status_callback:
-        status_callback("⚖️ Judge: Reading full debate transcript...")
+        status_callback("Judge: Reading full debate transcript...")
 
-    llm = OllamaLLM(
-        model=config.MODEL_NAME,
-        base_url=config.OLLAMA_BASE_URL,
-        temperature=config.JUDGE_TEMP,
-        num_predict=2500,
-    )
-
-    # Build debate transcript
     transcript = ""
     for item in debate_history:
         transcript += f"\n\n=== ROUND {item['round']} ===\n"
         transcript += f"\nADVOCATE:\n{item['advocate']}\n"
         transcript += f"\nCRITIC:\n{item['critic']}\n"
 
-    prompt = PromptTemplate(
-        input_variables=["business_case", "research_brief", "transcript"],
-        template="""You are an elite business strategy consultant and investment committee chair.
-You have observed a structured debate between an Advocate and a Critic about a business case, backed by real market research.
-
-Your job: produce a DEFINITIVE, BALANCED, ACTIONABLE business assessment report.
-
-Rules:
-- Be brutally honest — not diplomatic fluff
-- Draw on actual data from the research
-- Acknowledge the strongest points from both sides
-- Reach a CLEAR VERDICT: RECOMMEND / CONDITIONAL RECOMMEND / DO NOT RECOMMEND
-- If conditional, specify exact conditions the business must meet
-- Write like a McKinsey partner — sharp, structured, no fluff
-
-═══════════════════════════════════════
-BUSINESS CASE:
-{business_case}
-
-MARKET RESEARCH:
-{research_brief}
-
-DEBATE TRANSCRIPT:
-{transcript}
-═══════════════════════════════════════
-
-Now write the final report with EXACTLY these sections:
-
-## EXECUTIVE SUMMARY
-(3-4 sentences: verdict + top 3 reasons)
-
-## VERDICT
-State clearly: RECOMMEND / CONDITIONAL RECOMMEND / DO NOT RECOMMEND
-Viability Score: X/10 — (one sentence justification)
-
-## MARKET OPPORTUNITY ANALYSIS
-(What the data actually says about the market size, timing, demand)
-
-## CRITICAL RISKS & RED FLAGS
-(The Critic's strongest points that must be taken seriously)
-
-## COMPETITIVE LANDSCAPE
-(Who they'll fight, what moats exist or don't)
-
-## FINANCIAL VIABILITY
-(Investment required, realistic revenue timeline, break-even estimate)
-
-## STRATEGIC RECOMMENDATIONS
-(If proceeding: 5 specific actions to maximize success)
-(If not proceeding: what would need to change for this to be viable)
-
-## FINAL VERDICT JUSTIFICATION
-(2-3 paragraphs explaining why you reached this verdict, synthesizing both sides)"""
+    prompt = (
+        "You are an elite business strategy consultant and investment committee chair.\n"
+        "You observed a structured debate between an Advocate and a Critic, backed by real research.\n\n"
+        f"BUSINESS CASE:\n{business_case}\n\n"
+        f"MARKET RESEARCH:\n{research_brief}\n\n"
+        f"DEBATE TRANSCRIPT:\n{transcript}\n\n"
+        "Write the final assessment report with EXACTLY these sections:\n\n"
+        "## EXECUTIVE SUMMARY\n"
+        "3-4 sentences: verdict and top 3 reasons.\n\n"
+        "## VERDICT\n"
+        "State clearly: RECOMMEND / CONDITIONAL RECOMMEND / DO NOT RECOMMEND\n"
+        "Viability Score: X/10 with one-sentence justification.\n\n"
+        "## MARKET OPPORTUNITY ANALYSIS\n"
+        "What the research data says about market size, timing, and demand.\n\n"
+        "## CRITICAL RISKS AND RED FLAGS\n"
+        "The Critic's strongest points that cannot be ignored.\n\n"
+        "## COMPETITIVE LANDSCAPE\n"
+        "Who they compete against and what moats exist or are missing.\n\n"
+        "## FINANCIAL VIABILITY\n"
+        "Investment required, realistic revenue timeline, break-even estimate.\n\n"
+        "## STRATEGIC RECOMMENDATIONS\n"
+        "5 specific actions to maximize success. "
+        "If not recommending, state what must change to make this viable.\n\n"
+        "## FINAL VERDICT JUSTIFICATION\n"
+        "2-3 paragraphs synthesizing both sides and explaining your verdict."
     )
 
     if status_callback:
-        status_callback("⚖️ Judge: Writing final report...")
+        status_callback("Judge: Writing final report... (takes 1-3 minutes)")
 
-    report = LLMChain(llm=llm, prompt=prompt).run(
-        business_case=business_case,
-        research_brief=research_brief,
-        transcript=transcript,
-    )
+    result = await llm_generate(prompt, temperature=config.JUDGE_TEMP, max_tokens=2500)
 
     if status_callback:
-        status_callback("✅ Judge: Final report complete.")
+        status_callback("Judge: Report complete.")
 
-    return report.strip()
+    return result
+
+
+def run_judge(
+    business_case: str,
+    research_brief: str,
+    debate_history: list,
+    status_callback=None
+) -> str:
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(
+            run_judge_async(business_case, research_brief, debate_history, status_callback)
+        )
+    finally:
+        loop.close()
