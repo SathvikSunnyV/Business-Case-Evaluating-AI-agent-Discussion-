@@ -1,20 +1,70 @@
 """
-advocate.py — Argues FOR the business case using research data.
-Responds to Critic's previous arguments in subsequent rounds.
+advocate.py - Argues FOR the business case using ollama streaming.
 """
 
-from langchain_ollama import OllamaLLM
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
+import asyncio
+import ollama
 import config
 
+PERSONA = (
+    "You are a sharp, experienced business advocate and investment analyst. "
+    "Build the STRONGEST POSSIBLE CASE in favor of this business opportunity. "
+    "Argue with conviction using market data, strategic logic, and real-world analogies. "
+    "Be persuasive but grounded. Write clear punchy paragraphs. No bullet lists."
+)
 
-ADVOCATE_SYSTEM = """You are a sharp, experienced business advocate and investment analyst.
-Your role is to build the STRONGEST POSSIBLE CASE in favor of a business opportunity.
-You argue with conviction — using market data, strategic logic, and real-world analogies.
-You are persuasive but grounded. You briefly acknowledge risks only to explain why they are manageable.
-Write in clear, punchy paragraphs. Argue like a seasoned investor pitching to a committee.
-Use specific data points from the research wherever possible."""
+
+async def llm_generate(prompt: str, temperature: float = 0.7, max_tokens: int = 1500) -> str:
+    client = ollama.AsyncClient(host=config.OLLAMA_BASE_URL)
+    full_response = ""
+    async for chunk in await client.generate(
+        model=config.MODEL_NAME,
+        prompt=prompt,
+        stream=True,
+        options={"temperature": temperature, "num_predict": max_tokens}
+    ):
+        full_response += chunk.get("response", "")
+        if chunk.get("done", False):
+            break
+    return full_response.strip()
+
+
+async def run_advocate_async(
+    business_case: str,
+    research_brief: str,
+    round_num: int,
+    critic_previous: str = "",
+    status_callback=None
+) -> str:
+    if status_callback:
+        status_callback(f"Advocate: Writing Round {round_num} argument...")
+
+    if critic_previous:
+        prompt = (
+            f"{PERSONA}\n\n"
+            f"BUSINESS CASE:\n{business_case}\n\n"
+            f"RESEARCH DATA:\n{research_brief}\n\n"
+            f"CRITIC'S PREVIOUS ARGUMENT (counter this directly):\n{critic_previous}\n\n"
+            f"ROUND {round_num} TASK: Counter the Critic's specific objections using "
+            f"research data and logic. Then reinforce your strongest points. "
+            f"Write 3-4 substantial paragraphs. No bullet lists."
+        )
+    else:
+        prompt = (
+            f"{PERSONA}\n\n"
+            f"BUSINESS CASE:\n{business_case}\n\n"
+            f"RESEARCH DATA:\n{research_brief}\n\n"
+            f"ROUND 1 TASK: Make the strongest case FOR this business. "
+            f"Cover: market opportunity, timing, financial viability, manageable risks. "
+            f"Write 3-4 substantial paragraphs backed by the research data. No bullet lists."
+        )
+
+    result = await llm_generate(prompt, temperature=config.ADVOCATE_TEMP, max_tokens=config.MAX_TOKENS)
+
+    if status_callback:
+        status_callback(f"Advocate: Round {round_num} complete.")
+
+    return result
 
 
 def run_advocate(
@@ -22,75 +72,12 @@ def run_advocate(
     research_brief: str,
     round_num: int,
     critic_previous: str = "",
-    status_callback=None,
+    status_callback=None
 ) -> str:
-
-    if status_callback:
-        status_callback(f"📈 Advocate: Building Round {round_num} argument...")
-
-    llm = OllamaLLM(
-        model=config.MODEL_NAME,
-        base_url=config.OLLAMA_BASE_URL,
-        temperature=config.ADVOCATE_TEMP,
-        num_predict=config.MAX_TOKENS,
-    )
-
-    if critic_previous:
-        # Subsequent rounds: respond to critic's specific points
-        prompt = PromptTemplate(
-            input_variables=["business_case", "research_brief", "critic_previous", "round_num"],
-            template="""{system}
-
-BUSINESS CASE:
-{business_case}
-
-MARKET RESEARCH DATA (use this to support arguments):
-{research_brief}
-
-THE CRITIC'S PREVIOUS ARGUMENT (address these directly):
-{critic_previous}
-
-ROUND {round_num} — Your task:
-1. Directly counter the Critic's specific objections with data and logic
-2. Strengthen your core argument for why this business makes sense
-3. Point to market evidence that supports viability
-4. End with your strongest point
-
-Write 3-4 substantial paragraphs. Be direct and confident.""".replace("{system}", ADVOCATE_SYSTEM)
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(
+            run_advocate_async(business_case, research_brief, round_num, critic_previous, status_callback)
         )
-        result = LLMChain(llm=llm, prompt=prompt).run(
-            business_case=business_case,
-            research_brief=research_brief,
-            critic_previous=critic_previous,
-            round_num=round_num,
-        )
-    else:
-        # Round 1: Opening argument
-        prompt = PromptTemplate(
-            input_variables=["business_case", "research_brief"],
-            template="""{system}
-
-BUSINESS CASE:
-{business_case}
-
-MARKET RESEARCH DATA (use this to support arguments):
-{research_brief}
-
-ROUND 1 — Opening argument:
-Make the strongest case FOR pursuing this business. Cover:
-1. Why the market opportunity is real and significant
-2. Why the timing is right
-3. What makes this viable (financials, demand, execution)
-4. Why risks are manageable
-
-Write 3-4 substantial paragraphs backed by the research data.""".replace("{system}", ADVOCATE_SYSTEM)
-        )
-        result = LLMChain(llm=llm, prompt=prompt).run(
-            business_case=business_case,
-            research_brief=research_brief,
-        )
-
-    if status_callback:
-        status_callback(f"✅ Advocate: Round {round_num} argument ready.")
-
-    return result.strip()
+    finally:
+        loop.close()
